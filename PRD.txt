@@ -1,0 +1,88 @@
+Project: Mahjong 胡牌 Probability Simulator (Flutter App)
+
+Objective
+
+Develop a Flutter-based mobile application that allows users to simulate Mahjong "胡牌" probability by randomly generating hands of 5, 8, or 11 tiles (筒子 only). The app calculates the percentage of valid "胡牌" hands based on specific rules.
+
+胡牌定義 (Winning Hand Definition)
+
+A hand is considered "胡牌" if it meets the following structure:
+
+5 tiles: 1 meld (sequence or triplet) + 1 pair
+
+8 tiles: 2 melds + 1 pair
+
+11 tiles: 3 melds + 1 pair
+
+Valid Meld Types:
+
+Sequence (順子): Three consecutive numbers in the same suit (e.g., 1-2-3).
+
+Triplet (刻子): Three of the same number (e.g., 3-3-3).
+
+Invalid Hands:
+
+Hands that cannot be decomposed into the required number of melds and one pair are considered not 胡牌.
+
+A group of four of the same tile (槓子) is not recognized unless used as a triplet within the rules.
+
+Target Platform
+
+Flutter (iOS / Android)
+
+Core Features & Functions
+
+1. Simulation Control Panel
+
+Tile Count Selection: Radio buttons or dropdown to select simulation mode (5 tiles, 8 tiles, 11 tiles)
+
+Control Buttons:
+
+Run: Starts or resumes the simulation
+
+Pause: Temporarily halts the simulation
+
+Stop: Stops and resets the simulation
+
+2. Result Display Panel
+
+Live Statistics:
+
+Total number of hands simulated
+
+Number of valid "胡牌" hands
+
+Estimated probability (percentage)
+
+Last 3 Hands History:
+
+Display last three simulated hands
+
+Indicate whether each is 胡牌 or not
+
+Example:
+
+1 2 3 4 4 - 胡牌 ✅
+
+3 3 3 5 6 - 非胡牌 ❌
+
+3. Simulation Engine
+
+Randomly generates tile hands from 1 to 9 (representing 一筒 to 九筒)
+
+Allows infinite copies of any tile (unlimited tile count assumption)
+
+Internally checks the validity of the hand based on strict rules
+
+Runs in a background isolate to avoid UI blocking
+
+UI Requirements
+
+Minimalistic and clean interface
+
+Use numerals 1-9 (e.g., "1" represents 一筒)
+
+Clear result labeling (✅/❌)
+
+Button state changes when paused/stopped/running
+
