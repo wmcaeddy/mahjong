@@ -31,109 +31,162 @@ class SimulatorScreen extends StatefulWidget {
 
 class _SimulatorScreenState extends State<SimulatorScreen> {
   // Simulation parameters
-  int _selectedTileCount = 5; // Default to 5 tiles
+  int _selectedTileCount = 5; // Default to 5 tiles. Use 0 for "All"
+  int _numberOfSamples = 1000; // Default number of samples
+  final TextEditingController _samplesController = TextEditingController(text: '1000');
   bool _isRunning = false;
-  bool _isPaused = false;
-  
-  // Simulation results
+  // bool _isPaused = false; // Removed, not suitable for sample-based simulation
+
+  // Simulation results for individual tile counts
+  Map<int, SimulationStats> _statsMap = {
+    5: SimulationStats(),
+    8: SimulationStats(),
+    11: SimulationStats(),
+  };
+  int _currentSimulationStage = 0; // For 'All' mode: 5, 8, or 11. Or the selected tile count.
+
+  // Overall simulation results (used for single mode, or current stage in 'All' mode)
+  // These might be derived from _statsMap or directly updated.
+  // For now, let's keep them for the single mode display and potentially for current stage display.
   int _totalHands = 0;
   int _validHands = 0;
   double _probability = 0.0;
-  List<SimulationResult> _lastResults = [];
-  
-  // Timer for simulation
-  Timer? _simulationTimer;
+  List<SimulationResult> _lastValidHands = [];
+  List<SimulationResult> _lastInvalidHands = [];
+
+  // Timer? _simulationTimer; // Removed
   bool get _isWeb => identical(0, 0.0);
 
   @override
+  void initState() {
+    super.initState();
+    _samplesController.addListener(() {
+      final newSamples = int.tryParse(_samplesController.text);
+      if (newSamples != null && newSamples > 0) {
+        setState(() {
+          _numberOfSamples = newSamples;
+        });
+      }
+    });
+  }
+
+  @override
   void dispose() {
-    _stopSimulation();
+    _stopSimulation(); // Ensure any running simulation is flagged to stop
+    _samplesController.dispose();
     super.dispose();
   }
 
-  void _startSimulation() {
-    if (_isRunning && !_isPaused) return;
-    
-    if (_isPaused) {
-      setState(() {
-        _isPaused = false;
-        _isRunning = true;
-      });
+  void _resetSimulationData() {
+    setState(() {
+      _totalHands = 0;
+      _validHands = 0;
+      _probability = 0.0;
+      _lastValidHands = [];
+      _lastInvalidHands = [];
+      _statsMap = {
+        5: SimulationStats(),
+        8: SimulationStats(),
+        11: SimulationStats(),
+      };
+      _currentSimulationStage = 0;
+    });
+  }
+
+  Future<void> _runSimulationBatch(int tileCount, int samples) async {
+    if (!_isRunning) return;
+
+    setState(() {
+      _currentSimulationStage = tileCount;
+      // Reset stats for the current specific tile count if it's a single run
+      // or ensure the specific map entry is clean for an 'All' run stage.
+      if (_selectedTileCount != 0) { // Single mode run
+        _statsMap[tileCount]?.reset();
+        _totalHands = 0;
+        _validHands = 0;
+        _probability = 0.0;
+        _lastValidHands = [];
+        _lastInvalidHands = [];
+      }
+    });
+
+    final random = Random();
+    for (int i = 0; i < samples; i++) {
+      if (!_isRunning) break; // Check if simulation was stopped
+
+      final hand = List.generate(tileCount, (_) => random.nextInt(9) + 1);
+      final isValid = MahjongValidator.isValidHand(hand);
       
-      // Resume timer
-      _startSimulationTimer();
-      return;
+      // Update stats for the specific tile count
+      _statsMap[tileCount]?.recordHand(hand, isValid);
+
+      // If in single mode, also update the general display variables
+      if (_selectedTileCount != 0) {
+          _totalHands = _statsMap[tileCount]!.totalHands;
+          _validHands = _statsMap[tileCount]!.validHands;
+          _probability = _statsMap[tileCount]!.probability;
+          _lastValidHands = _statsMap[tileCount]!.lastValidHands;
+          _lastInvalidHands = _statsMap[tileCount]!.lastInvalidHands;
+      }
+
+      if (i % 100 == 0) { // Update UI periodically and allow event loop to process
+        setState(() {});
+        await Future.delayed(Duration.zero); // Yield to event loop
+      }
     }
-    
+    // Final update for the current batch
+    setState(() {});
+  }
+
+  Future<void> _startSimulation() async {
+    if (_isRunning) return;
+
     setState(() {
       _isRunning = true;
-      _isPaused = false;
+      _resetSimulationData(); 
     });
-    
-    _startSimulationTimer();
+
+    if (_selectedTileCount == 0) { // "All" mode
+      for (int tileCount in [5, 8, 11]) {
+        if (!_isRunning) break;
+        await _runSimulationBatch(tileCount, _numberOfSamples);
+      }
+    } else { // Single tile count mode
+      await _runSimulationBatch(_selectedTileCount, _numberOfSamples);
+    }
+
+    if (mounted) { // Check if the widget is still in the tree
+      setState(() {
+        _isRunning = false;
+        if (_selectedTileCount != 0 && _statsMap.containsKey(_selectedTileCount)){
+            _totalHands = _statsMap[_selectedTileCount]!.totalHands;
+            _validHands = _statsMap[_selectedTileCount]!.validHands;
+            _probability = _statsMap[_selectedTileCount]!.probability;
+            _lastValidHands = _statsMap[_selectedTileCount]!.lastValidHands;
+            _lastInvalidHands = _statsMap[_selectedTileCount]!.lastInvalidHands;
+        }
+        _currentSimulationStage = 0; // Reset stage indicator
+      });
+    }
   }
 
-  void _pauseSimulation() {
-    if (!_isRunning || _isPaused) return;
-    
-    setState(() {
-      _isPaused = true;
-    });
-    
-    _simulationTimer?.cancel();
-  }
+  // void _pauseSimulation() { // Removed
+  // }
 
   void _stopSimulation() {
-    _simulationTimer?.cancel();
-    _simulationTimer = null;
-    
     setState(() {
-      _isRunning = false;
-      _isPaused = false;
+      _isRunning = false; // This flag will be checked by _runSimulationBatch
+      // _isPaused = false; // Removed
     });
   }
 
   void _resetSimulation() {
     _stopSimulation();
-    setState(() {
-      _totalHands = 0;
-      _validHands = 0;
-      _probability = 0.0;
-      _lastResults = [];
-    });
+    _resetSimulationData();
   }
 
-  void _startSimulationTimer() {
-    _simulationTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
-      if (_isPaused) {
-        timer.cancel();
-        return;
-      }
-      
-      // Generate a random hand
-      final random = Random();
-      final hand = List.generate(
-        _selectedTileCount,
-        (_) => random.nextInt(9) + 1, // 1-9 tiles
-      );
-      
-      // Check if it's a valid hand
-      final isValid = MahjongValidator.isValidHand(hand);
-      final result = SimulationResult(hand, isValid);
-      
-      setState(() {
-        _totalHands++;
-        if (isValid) _validHands++;
-        _probability = _validHands / _totalHands * 100;
-        
-        // Keep only last 3 results
-        _lastResults.insert(0, result);
-        if (_lastResults.length > 3) {
-          _lastResults.removeLast();
-        }
-      });
-    });
-  }
+  // void _startSimulationTimer() { // Removed
+  // }
 
   @override
   Widget build(BuildContext context) {
@@ -147,7 +200,7 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Tile Count Selection
+            // Tile Count Selection & Number of Samples
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -155,10 +208,11 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Tile Count Selection',
+                      'Simulation Settings',
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
+                    const Text('Tile Count:'),
                     Row(
                       children: [
                         Radio<int>(
@@ -172,7 +226,7 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
                                   });
                                 },
                         ),
-                        const Text('5 Tiles'),
+                        const Text('5'),
                         Radio<int>(
                           value: 8,
                           groupValue: _selectedTileCount,
@@ -184,7 +238,7 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
                                   });
                                 },
                         ),
-                        const Text('8 Tiles'),
+                        const Text('8'),
                         Radio<int>(
                           value: 11,
                           groupValue: _selectedTileCount,
@@ -196,16 +250,36 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
                                   });
                                 },
                         ),
-                        const Text('11 Tiles'),
+                        const Text('11'),
+                        Radio<int>(
+                          value: 0, // Using 0 for "All"
+                          groupValue: _selectedTileCount,
+                          onChanged: _isRunning
+                              ? null
+                              : (value) {
+                                  setState(() {
+                                    _selectedTileCount = value!;
+                                  });
+                                },
+                        ),
+                        const Text('All (5,8,11)'),
                       ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Text('Number of Samples:'),
+                    TextField(
+                      controller: _samplesController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        hintText: 'Enter number of samples',
+                      ),
+                      enabled: !_isRunning,
                     ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            
-            // Control Buttons
+            // Simulation Controls
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -221,19 +295,25 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         ElevatedButton.icon(
-                          onPressed: _isRunning && !_isPaused ? null : _startSimulation,
-                          icon: const Icon(Icons.play_arrow),
-                          label: const Text('Run'),
+                          icon: Icon(_isRunning ? Icons.hourglass_empty : Icons.play_circle_filled),
+                          label: Text(_isRunning ? 'Simulating...' : 'Start Simulation'),
+                          onPressed: _isRunning ? null : _startSimulation,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _isRunning ? Colors.grey : Colors.green,
+                          ),
                         ),
                         ElevatedButton.icon(
-                          onPressed: _isRunning && !_isPaused ? _pauseSimulation : null,
-                          icon: const Icon(Icons.pause),
-                          label: const Text('Pause'),
-                        ),
-                        ElevatedButton.icon(
-                          onPressed: _isRunning ? _resetSimulation : null,
-                          icon: const Icon(Icons.stop),
+                          icon: const Icon(Icons.stop_circle_outlined),
                           label: const Text('Stop'),
+                          onPressed: _isRunning ? _stopSimulation : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                          ),
+                        ),
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.refresh_outlined),
+                          label: const Text('Reset'),
+                          onPressed: _isRunning ? null : _resetSimulation,
                         ),
                       ],
                     ),
@@ -255,72 +335,121 @@ class _SimulatorScreenState extends State<SimulatorScreen> {
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        _buildStatItem('Total Hands', _totalHands.toString()),
-                        _buildStatItem('Valid Hands', _validHands.toString()),
-                        _buildStatItem(
-                          'Probability',
-                          _totalHands > 0
-                              ? '${_probability.toStringAsFixed(2)}%'
-                              : '0.00%',
-                        ),
-                      ],
-                    ),
+                    if (_isRunning && _selectedTileCount == 0 && _currentSimulationStage != 0)
+                      Text('Simulating for $_currentSimulationStage tiles... Sample ${_statsMap[_currentSimulationStage]?.totalHands ?? 0}/$_numberOfSamples'),
+                    
+                    if (_selectedTileCount != 0) ...[ // Single mode display
+                      _buildStatItem('Total Hands', _totalHands.toString()),
+                      _buildStatItem('Valid Hands', _validHands.toString()),
+                      _buildStatItem('Probability', _totalHands > 0 ? '${_probability.toStringAsFixed(2)}%' : '0.00%'),
+                    ] else if (_selectedTileCount == 0) ...[ // "All" mode display
+                      if (!_isRunning && _statsMap[5]!.totalHands == 0 && _statsMap[8]!.totalHands == 0 && _statsMap[11]!.totalHands == 0) ...[
+                        const Text('Run simulation to see stats for All (5, 8, 11).'),
+                      ] else ...[
+                        for (var tc in [5, 8, 11])
+                          if (_statsMap[tc]!.totalHands > 0 || (_isRunning && _currentSimulationStage == tc)) 
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '$tc Tiles Results${_isRunning && _currentSimulationStage == tc && _statsMap[tc]!.totalHands < _numberOfSamples ? " (running... ${_statsMap[tc]!.totalHands}/$_numberOfSamples)" : ""}:',
+                                    style: const TextStyle(fontWeight: FontWeight.bold)
+                                  ),
+                                  Text('  Total Hands: ${_statsMap[tc]!.totalHands}'),
+                                  Text('  Valid Hands: ${_statsMap[tc]!.validHands}'),
+                                  Text('  Probability: ${_statsMap[tc]!.probability.toStringAsFixed(2)}%'),
+                                ],
+                              ),
+                            ),
+                      ]
+                    ]
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 16),
             
-            // Last 3 Hands
+            // Last Hands (Valid and Invalid)
             Expanded(
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Last 3 Hands',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      Expanded(
-                        child: _lastResults.isEmpty
-                            ? const Center(child: Text('No hands simulated yet'))
-                            : ListView.builder(
-                                itemCount: _lastResults.length,
-                                itemBuilder: (context, index) {
-                                  final result = _lastResults[index];
-                                  return ListTile(
-                                    title: Text(
-                                      result.hand.join(' '),
-                                      style: const TextStyle(fontSize: 16),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Last 3 Valid Hands
+                  Expanded(
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Last 3 Valid Hands (胡牌)',
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+                            ),
+                            const SizedBox(height: 8),
+                            Expanded(
+                              child: (_selectedTileCount != 0 && _lastValidHands.isEmpty && !(_statsMap.values.any((s) => s.lastValidHands.isNotEmpty))) || 
+                                     (_selectedTileCount == 0 && !_statsMap.values.any((s) => s.lastValidHands.isNotEmpty))
+                                  ? const Center(child: Text('No valid hands yet'))
+                                  : ListView(
+                                      children: _selectedTileCount != 0 
+                                        ? _lastValidHands.map<Widget>((r) => ListTile(title: Text(r.hand.join(' ')), trailing: const Text('胡牌 ✅', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)))).toList()
+                                        : [5, 8, 11].expand<Widget>((tc) {
+                                            if (_statsMap[tc]!.lastValidHands.isNotEmpty) {
+                                              return [
+                                                Padding(padding: const EdgeInsets.only(top: 8.0, bottom: 4.0), child: Text('$tc Tiles:', style: const TextStyle(fontStyle: FontStyle.italic, fontWeight: FontWeight.bold))),
+                                                ..._statsMap[tc]!.lastValidHands.map((r) => ListTile(title: Text(r.hand.join(' ')), trailing: const Text('胡牌 ✅', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold))))
+                                              ];
+                                            }
+                                            return [];
+                                          }).toList(),
                                     ),
-                                    trailing: result.isValid
-                                        ? const Text(
-                                            '胡牌 ✅',
-                                            style: TextStyle(
-                                              color: Colors.green,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          )
-                                        : const Text(
-                                            '非胡牌 ❌',
-                                            style: TextStyle(
-                                              color: Colors.red,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                  );
-                                },
-                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 16),
+                  // Last 3 Invalid Hands
+                  Expanded(
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Last 3 Invalid Hands (非胡牌)',
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red),
+                            ),
+                            const SizedBox(height: 8),
+                            Expanded(
+                              child: (_selectedTileCount != 0 && _lastInvalidHands.isEmpty && !(_statsMap.values.any((s) => s.lastInvalidHands.isNotEmpty))) ||
+                                     (_selectedTileCount == 0 && !_statsMap.values.any((s) => s.lastInvalidHands.isNotEmpty))
+                                  ? const Center(child: Text('No invalid hands yet'))
+                                  : ListView(
+                                      children: _selectedTileCount != 0
+                                        ? _lastInvalidHands.map<Widget>((r) => ListTile(title: Text(r.hand.join(' ')), trailing: const Text('非胡牌 ❌', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)))).toList()
+                                        : [5, 8, 11].expand<Widget>((tc) {
+                                            if (_statsMap[tc]!.lastInvalidHands.isNotEmpty) {
+                                              return [
+                                                Padding(padding: const EdgeInsets.only(top: 8.0, bottom: 4.0), child: Text('$tc Tiles:', style: const TextStyle(fontStyle: FontStyle.italic, fontWeight: FontWeight.bold))),
+                                                ..._statsMap[tc]!.lastInvalidHands.map((r) => ListTile(title: Text(r.hand.join(' ')), trailing: const Text('非胡牌 ❌', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold))))
+                                              ];
+                                            }
+                                            return [];
+                                          }).toList(),
+                                    ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -454,5 +583,42 @@ class MahjongValidator {
     
     // If we've tried all possibilities and none worked, return false
     return false;
+  }
+}
+
+// Helper class for storing simulation statistics
+class SimulationStats {
+  int totalHands = 0;
+  int validHands = 0;
+  double probability = 0.0;
+  List<SimulationResult> lastValidHands = [];
+  List<SimulationResult> lastInvalidHands = [];
+
+  void reset() {
+    totalHands = 0;
+    validHands = 0;
+    probability = 0.0;
+    lastValidHands = [];
+    lastInvalidHands = [];
+  }
+
+  void recordHand(List<int> hand, bool isValid) {
+    totalHands++;
+    final result = SimulationResult(hand, isValid);
+    if (isValid) {
+      validHands++;
+      lastValidHands.insert(0, result);
+      if (lastValidHands.length > 3) {
+        lastValidHands.removeLast();
+      }
+    } else {
+      lastInvalidHands.insert(0, result);
+      if (lastInvalidHands.length > 3) {
+        lastInvalidHands.removeLast();
+      }
+    }
+    if (totalHands > 0) {
+      probability = validHands / totalHands * 100;
+    }
   }
 }
